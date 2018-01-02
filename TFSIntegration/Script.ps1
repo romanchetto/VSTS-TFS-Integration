@@ -1,5 +1,6 @@
 ﻿param(
     [string]$address,
+	[string]$accessKey,
     [string]$timeDelay, 
     [string]$doneStatusAs, 
     [string]$report, 
@@ -487,6 +488,10 @@ namespace TFSIntegrationConsole
         public static readonly String BUILD_ABORTED = "ABORTED";
 
         public static readonly String SCHEDULE_HAS_NOT_REFRESHED_YET = "Leaptest controller has not refreshed yet after refreshing/restarting";
+
+		public static readonly String WRONG_ACCESS_KEY = "Your Access Key is wrong, empty, changed or expired!";
+
+        public static readonly String INTEGRATION = "TFS-Integration";
     }
 
     public class Program
@@ -596,6 +601,7 @@ namespace TFSIntegrationConsole
 
         private static async Task<Dictionary<String, String>> GetSchedulesIdTitleDictionary(
                 String leaptestAddress,
+				String accessKey,
                 List<String> rawScheduleList,
                 ScheduleCollection buildResult,
                 List<InvalidSchedule> invalidSchedules,
@@ -611,75 +617,90 @@ namespace TFSIntegrationConsole
                 try
                 {
                     using (HttpClient client = new HttpClient())
-                    using (HttpResponseMessage response = await client.GetAsync(scheduleListUri)) //get schedule Title and/or Id
-                    {
-                        int statusCode = (int)response.StatusCode;
-                        string status = response.StatusCode.ToString();
+					{
+						using (HttpRequestMessage request = new HttpRequestMessage())
+						{
+                            request.RequestUri = new Uri(scheduleListUri);
+                            //request.Content = new StringContent("");
+                            request.Method = HttpMethod.Get;
+                            request.Headers.Add("AccessKey", accessKey);
+                            request.Headers.Add("Integration", Messages.INTEGRATION);
 
-                        switch (statusCode)
-                        {
-                            case 200: //SUCCESS
+                            using (HttpResponseMessage response = await client.SendAsync(request)) //get schedule Title and/or Id
+							{
+								int statusCode = (int)response.StatusCode;
+								string status = response.StatusCode.ToString();
 
-                                using (HttpContent content = response.Content)
-                                {
-                                    string responseContent = await content.ReadAsStringAsync();
+								switch (statusCode)
+								{
+									case 200: //SUCCESS
 
-                                    JArray jsonScheduleList = JArray.Parse(responseContent);
+									using (HttpContent content = response.Content)
+									{
+										string responseContent = await content.ReadAsStringAsync();
 
-                                    foreach (String rawSchedule in rawScheduleList)
-                                    {
-                                        bool isSuccessfullyMapped = false;
+										JArray jsonScheduleList = JArray.Parse(responseContent);
 
-                                        foreach (JObject jsonSchedule in jsonScheduleList)
-                                        {
-                                            String Id = DefaultTokenStringValueIfNull("Id", jsonSchedule);
-                                            String Title = DefaultTokenStringValueIfNull("Title", jsonSchedule);
+										foreach (String rawSchedule in rawScheduleList)
+										{
+											bool isSuccessfullyMapped = false;
 
-                                            if (Id.Equals(rawSchedule)) //Id match
-                                            {
-                                                if (!schedulesIdTitleDictionary.ContainsValue(Title)) //Avoid repeat
-                                                {
-                                                    schedulesIdTitleDictionary.Add(rawSchedule, Title);
-                                                    buildResult.Schedules.Add(new Schedule(rawSchedule, Title));
-                                                    logger.Info(String.Format(Messages.SCHEDULE_DETECTED, Title, rawSchedule));
-                                                }
-                                                isSuccessfullyMapped = true;
-                                            }
+											foreach (JObject jsonSchedule in jsonScheduleList)
+											{
+												String Id = DefaultTokenStringValueIfNull("Id", jsonSchedule);
+												String Title = DefaultTokenStringValueIfNull("Title", jsonSchedule);
 
-                                            if (Title.Equals(rawSchedule)) //Title match 
-                                            {
-                                                if (!schedulesIdTitleDictionary.ContainsKey(Id)) //Avoid repeat
-                                                {
-                                                    schedulesIdTitleDictionary.Add(Id, rawSchedule);
-                                                    buildResult.Schedules.Add(new Schedule(Id, rawSchedule));
-                                                    logger.Info(String.Format(Messages.SCHEDULE_DETECTED, rawSchedule, Id));
-                                                }
-                                                isSuccessfullyMapped = true;
-                                            }
-                                        }
+												if (Id.Equals(rawSchedule)) //Id match
+												{
+													if (!schedulesIdTitleDictionary.ContainsValue(Title)) //Avoid repeat
+													{
+														schedulesIdTitleDictionary.Add(rawSchedule, Title);
+														buildResult.Schedules.Add(new Schedule(rawSchedule, Title));
+														logger.Info(String.Format(Messages.SCHEDULE_DETECTED, Title, rawSchedule));
+													}
+													isSuccessfullyMapped = true;
+												}
 
-                                        if (!isSuccessfullyMapped)
+												if (Title.Equals(rawSchedule)) //Title match 
+												{
+													if (!schedulesIdTitleDictionary.ContainsKey(Id)) //Avoid repeat
+													{
+														schedulesIdTitleDictionary.Add(Id, rawSchedule);
+														buildResult.Schedules.Add(new Schedule(Id, rawSchedule));
+														logger.Info(String.Format(Messages.SCHEDULE_DETECTED, rawSchedule, Id));
+													}
+													isSuccessfullyMapped = true;
+												}
+											}
+
+											if (!isSuccessfullyMapped)
                                             invalidSchedules.Add(new InvalidSchedule(rawSchedule, Messages.NO_SUCH_SCHEDULE));
-                                    }
-                                }
+										}
+									}
 
-                                break;
+									break;
+									case 406:
+                                        String errorMessage406 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+                                        errorMessage406 += String.Format("\n{0}", Messages.WRONG_ACCESS_KEY);
+                                        throw new Exception(errorMessage406);
 
-                            case 445://LICENSE EXPIRED
-                                String errorMessage445 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage445 += String.Format("\n{0}", Messages.LICENSE_EXPIRED);
-                                throw new Exception(errorMessage445);
+									case 445://LICENSE EXPIRED
+										String errorMessage445 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage445 += String.Format("\n{0}", Messages.LICENSE_EXPIRED);
+										throw new Exception(errorMessage445);
 
-                            case 500://CONTROLLER ERROR
-                                String errorMessage500 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage500 += String.Format("\n{0}", Messages.CONTROLLER_RESPONDED_WITH_ERRORS);
-                                throw new Exception(errorMessage500);
+									case 500://CONTROLLER ERROR
+										String errorMessage500 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage500 += String.Format("\n{0}", Messages.CONTROLLER_RESPONDED_WITH_ERRORS);
+										throw new Exception(errorMessage500);
 
-                            default:
-                                String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                throw new Exception(errorMessage);
-                        }
-                    }
+									default:
+										String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										throw new Exception(errorMessage);
+								}
+							}
+						}
+					}
                 }
                 catch (HttpRequestException e)
                 {
@@ -699,6 +720,7 @@ namespace TFSIntegrationConsole
 
         private static async Task<RUN_RESULT> RunSchedule(
             String leaptestAddress,
+			String accessKey,
             String scheduleId,
             String scheduleTitle,
             int currentScheduleIndex,
@@ -717,53 +739,69 @@ namespace TFSIntegrationConsole
                 try
                 {
                     using (HttpClient client = new HttpClient())
-                    using (HttpResponseMessage response = await client.PutAsync(uri, new StringContent(String.Empty))) //Send PUT request and launch schedule
-                    {
-                        int statusCode = (int)response.StatusCode;
-                        string status = response.StatusCode.ToString();
+					{
+						using (HttpRequestMessage request = new HttpRequestMessage())
+						{
+                            request.RequestUri = new Uri(uri);
+                            request.Content = new StringContent("");
+                            request.Method = HttpMethod.Put;
+                            request.Headers.Add("AccessKey", accessKey);
+                            request.Headers.Add("Integration", Messages.INTEGRATION);
 
-                        switch (statusCode)
-                        {
-                            case 204://SUCCESS
-                                isSuccessfullyRun = RUN_RESULT.RUN_SUCCESS;
-                                string successMessage = String.Format(Messages.SCHEDULE_RUN_SUCCESS, scheduleTitle, scheduleId);
-                                buildResult.Schedules[currentScheduleIndex].Id = currentScheduleIndex;
-                                logger.Info(Messages.SCHEDULE_CONSOLE_LOG_SEPARATOR);
-                                logger.Info(successMessage);
-                                break;
+							using (HttpResponseMessage response = await client.SendAsync(request))
+							{
+								int statusCode = (int)response.StatusCode;
+								string status = response.StatusCode.ToString();
 
-                            case 404://SCHEDULE NOT FOUND
-                                String errorMessage404 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage404 += String.Format("\n{0}", String.Format(Messages.NO_SUCH_SCHEDULE_WAS_FOUND, scheduleTitle, scheduleId));
-                                throw new Exception(errorMessage404);
+								switch (statusCode)
+								{
+									case 204://SUCCESS
+										isSuccessfullyRun = RUN_RESULT.RUN_SUCCESS;
+										string successMessage = String.Format(Messages.SCHEDULE_RUN_SUCCESS, scheduleTitle, scheduleId);
+										buildResult.Schedules[currentScheduleIndex].Id = currentScheduleIndex;
+										logger.Info(Messages.SCHEDULE_CONSOLE_LOG_SEPARATOR);
+										logger.Info(successMessage);
+									break;
 
-                            case 444://SCHEDULE HAS NO CASES
-                                String errorMessage444 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage444 += String.Format("\n{0}", String.Format(Messages.SCHEDULE_HAS_NO_CASES, scheduleTitle, scheduleId));
-                                throw new Exception(errorMessage444);
+									case 404://SCHEDULE NOT FOUND
+										String errorMessage404 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage404 += String.Format("\n{0}", String.Format(Messages.NO_SUCH_SCHEDULE_WAS_FOUND, scheduleTitle, scheduleId));
+										throw new Exception(errorMessage404);
 
-                            case 445://LICENSE EXPIRED
-                                String errorMessage445 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage445 += String.Format("\n{0}", Messages.LICENSE_EXPIRED);
-                                throw new Exception(errorMessage445);
+									case 406:
+                                        String errorMessage406 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+                                        errorMessage406 += String.Format("\n{0}", Messages.WRONG_ACCESS_KEY);
+                                        throw new Exception(errorMessage406);
 
-                            case 448://CACHE TIMEOUT
-                                String errorMessage448 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage448 += String.Format("\n{0}", String.Format(Messages.CACHE_TIMEOUT_EXCEPTION, scheduleTitle, scheduleId));
-                                isSuccessfullyRun = RUN_RESULT.RUN_REPEAT;
-                                Console.Error.WriteLine(errorMessage448);
-                                break;
+									case 444://SCHEDULE HAS NO CASES
+										String errorMessage444 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage444 += String.Format("\n{0}", String.Format(Messages.SCHEDULE_HAS_NO_CASES, scheduleTitle, scheduleId));
+										throw new Exception(errorMessage444);
 
-                            case 500://SCHEDULE IS RUNNING NOW
-                                String errorMessage500 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage500 += String.Format("\n{0}", String.Format(Messages.SCHEDULE_IS_RUNNING_NOW, scheduleTitle, scheduleId));
-                                throw new Exception(errorMessage500);
+									case 445://LICENSE EXPIRED
+										String errorMessage445 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage445 += String.Format("\n{0}", Messages.LICENSE_EXPIRED);
+										throw new Exception(errorMessage445);
 
-                            default:
-                                String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                throw new Exception(errorMessage);
-                        }
-                    }
+									case 448://CACHE TIMEOUT
+										String errorMessage448 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage448 += String.Format("\n{0}", String.Format(Messages.CACHE_TIMEOUT_EXCEPTION, scheduleTitle, scheduleId));
+										isSuccessfullyRun = RUN_RESULT.RUN_REPEAT;
+										Console.Error.WriteLine(errorMessage448);
+										break;
+
+									case 500://SCHEDULE IS RUNNING NOW
+										String errorMessage500 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage500 += String.Format("\n{0}", String.Format(Messages.SCHEDULE_IS_RUNNING_NOW, scheduleTitle, scheduleId));
+										throw new Exception(errorMessage500);
+
+									default:
+										String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										throw new Exception(errorMessage);
+								}	
+							}
+						}
+					}
                 }
                 catch (HttpRequestException e)
                 {
@@ -788,7 +826,7 @@ namespace TFSIntegrationConsole
 
         }
 
-        private static async Task<bool> StopSchedule(String leaptestAddress, String scheduleId, String scheduleTitle, SimpleLogger logger)
+        private static async Task<bool> StopSchedule(String leaptestAddress, String accessKey, String scheduleId, String scheduleTitle, SimpleLogger logger)
         {
             bool isSuccessfullyStopped = false;
 
@@ -797,20 +835,30 @@ namespace TFSIntegrationConsole
             try
             {
                 using (HttpClient client = new HttpClient())
-                using (HttpResponseMessage response = await client.PutAsync(uri, new StringContent(String.Empty))) //Send PUT request and launch schedule
-                {
+				{
+					using (HttpRequestMessage request = new HttpRequestMessage())
+					{
+                        request.RequestUri = new Uri(uri);
+                        request.Content = new StringContent("");
+                        request.Method = HttpMethod.Put;
+                        request.Headers.Add("AccessKey", accessKey);
+                        request.Headers.Add("Integration", Messages.INTEGRATION);
 
-                    if (response.StatusCode == HttpStatusCode.NoContent)     // 204 Response means correct schedule launching 
-                    {
-                        logger.Error(String.Format(Messages.STOP_SUCCESS, scheduleTitle, scheduleId));
-                        isSuccessfullyStopped = true;
-                    }
-                    else
-                    {
-                        String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, (int)response.StatusCode, response.StatusCode.ToString());
-                        throw new WebException(errorMessage);
-                    }
-                }
+						using (HttpResponseMessage response = await client.SendAsync(request)) //Send PUT request and launch schedule
+						{
+							if (response.StatusCode == HttpStatusCode.NoContent)     // 204 Response means correct schedule launching 
+							{
+								logger.Error(String.Format(Messages.STOP_SUCCESS, scheduleTitle, scheduleId));
+								isSuccessfullyStopped = true;
+							}
+							else
+							{
+								String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, (int)response.StatusCode, response.StatusCode.ToString());
+								throw new WebException(errorMessage);
+							}
+						}
+					}
+				}
             }
             catch (Exception e)
             {
@@ -824,6 +872,7 @@ namespace TFSIntegrationConsole
 
         private static async Task<bool> GetScheduleState(
             String leaptestAddress,
+			String accessKey,
             String scheduleId,
             String scheduleTitle,
             int currentScheduleIndex,
@@ -843,168 +892,184 @@ namespace TFSIntegrationConsole
                 try
                 {
                     using (HttpClient client = new HttpClient())
-                    using (HttpResponseMessage response = await client.GetAsync(uri)) //get schedule Title and/or Id
-                    {
-                        int statusCode = (int)response.StatusCode;
-                        string status = response.StatusCode.ToString();
+					{
+						using (HttpRequestMessage request = new HttpRequestMessage())
+						{
+							request.RequestUri = new Uri(uri);
+							//request.Content = new StringContent("");
+							request.Method = HttpMethod.Get;
+							request.Headers.Add("AccessKey", accessKey);
+							request.Headers.Add("Integration", Messages.INTEGRATION);
 
-                        switch (statusCode)
-                        {
-                            case 200://SUCCESS
+							using (HttpResponseMessage response = await client.SendAsync(request))
+							{
+								int statusCode = (int)response.StatusCode;
+								string status = response.StatusCode.ToString();
 
-                                using (HttpContent content = response.Content)
-                                {
-                                    string responseContent = await content.ReadAsStringAsync();
+								switch (statusCode)
+								{
+									case 200://SUCCESS
 
-                                    JObject jsonState = JObject.Parse(responseContent);
+										using (HttpContent content = response.Content)
+										{
+											string responseContent = await content.ReadAsStringAsync();
 
-                                    String ScheduleId = DefaultTokenStringValueIfNull("ScheduleId", jsonState);
+											JObject jsonState = JObject.Parse(responseContent);
 
-                                    if (IsScheduleStillRunning(jsonState))
-                                        isScheduleStillRunning = true;
-                                    else
-                                    {
-                                        isScheduleStillRunning = false;
+											String ScheduleId = DefaultTokenStringValueIfNull("ScheduleId", jsonState);
 
-                                        /////////Schedule Info
+											if (IsScheduleStillRunning(jsonState))
+												isScheduleStillRunning = true;
+											else
+											{
+												isScheduleStillRunning = false;
 
-                                        String ScheduleTitle = DefaultTokenStringValueIfNull("LastRun.ScheduleTitle", jsonState);
+												/////////Schedule Info
 
-                                        buildResult.Schedules[currentScheduleIndex].Time = TimeSpan.Parse(jsonState.SelectToken("LastRun.ExecutionTotalTime").Value<string>()).TotalSeconds;
+												String ScheduleTitle = DefaultTokenStringValueIfNull("LastRun.ScheduleTitle", jsonState);
 
-                                        uint passedCount = CaseStatusCount("PassedCount", jsonState);
-                                        uint failedCount = CaseStatusCount("FailedCount", jsonState);
-                                        uint doneCount = CaseStatusCount("DoneCount", jsonState);
+												buildResult.Schedules[currentScheduleIndex].Time = TimeSpan.Parse(jsonState.SelectToken("LastRun.ExecutionTotalTime").Value<string>()).TotalSeconds;
 
-                                        if (doneStatusValue.Equals("Failed"))
-                                            failedCount += doneCount;
-                                        else
-                                            passedCount += doneCount;
+												uint passedCount = CaseStatusCount("PassedCount", jsonState);
+												uint failedCount = CaseStatusCount("FailedCount", jsonState);
+												uint doneCount = CaseStatusCount("DoneCount", jsonState);
 
-
-                                        ///////////AutomationRunItemsInfo
-                                        List<string> AutomationRunId = new List<string>();
-                                        foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].AutomationRunId")) AutomationRunId.Add(token.Value<string>());
-                                        List<string> Statuses = new List<string>();
-                                        foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].Status")) Statuses.Add(token.Value<string>());
-                                        List<string> Elapsed = new List<string>();
-                                        foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].Elapsed")) Elapsed.Add(DefaultElapsedIfNull(token));
-                                        List<string> Environments = new List<string>();
-                                        foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].Environment.Title")) Environments.Add(token.Value<string>());
-
-                                        //CaseInfo
-                                        List<string> CaseTitles = new List<string>();
-                                        foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*]"))
-                                        {
-                                            String caseTitle = DefaultTokenStringValueIfNull("Case.Title", token);
-                                            if (String.IsNullOrEmpty(caseTitle))
-                                                CaseTitles.Add(CaseTitles[CaseTitles.Count - 1]);
-                                            else
-                                                CaseTitles.Add(caseTitle);
-                                        }
+												if (doneStatusValue.Equals("Failed"))
+													failedCount += doneCount;
+												else
+													passedCount += doneCount;
 
 
-                                        for (int i = 0; i < AutomationRunId.Count; i++)
-                                        {
+												///////////AutomationRunItemsInfo
+												List<string> AutomationRunId = new List<string>();
+												foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].AutomationRunId")) AutomationRunId.Add(token.Value<string>());
+												List<string> Statuses = new List<string>();
+												foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].Status")) Statuses.Add(token.Value<string>());
+												List<string> Elapsed = new List<string>();
+												foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].Elapsed")) Elapsed.Add(DefaultElapsedIfNull(token));
+												List<string> Environments = new List<string>();
+												foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*].Environment.Title")) Environments.Add(token.Value<string>());
 
-                                            //double seconds = jsonArray.getJSONObject(i).getDouble("TotalSeconds");
-                                            double seconds = ParseExecutionTimeToSeconds(Elapsed[i]);
+												//CaseInfo
+												List<string> CaseTitles = new List<string>();
+												foreach (JToken token in jsonState.SelectTokens("LastRun.AutomationRunItems[*]"))
+												{
+													String caseTitle = DefaultTokenStringValueIfNull("Case.Title", token);
+													if (String.IsNullOrEmpty(caseTitle))
+														CaseTitles.Add(CaseTitles[CaseTitles.Count - 1]);
+													else
+														CaseTitles.Add(caseTitle);
+												}
 
-                                            logger.Info(Messages.CASE_CONSOLE_LOG_SEPARATOR);
 
-                                            if (Statuses[i].Equals("Failed") || (Statuses[i].Equals("Done") && doneStatusValue.Equals("Failed")) || Statuses[i].Equals("Error") || Statuses[i].Equals("Cancelled"))
-                                            {
-                                                if (Statuses[i].Equals("Error") || Statuses[i].Equals("Cancelled"))
-                                                    failedCount++;
+												for (int i = 0; i < AutomationRunId.Count; i++)
+												{
 
-                                                //KeyframeInfo
-                                                List<string> KeyFrameTimeStamps = new List<string>();
-                                                foreach (JToken token in jsonState.SelectTokens(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[*].Timestamp", i)))
-                                                {
-                                                    var value = (DateTime)token.ToObject(typeof(DateTime));
-                                                    KeyFrameTimeStamps.Add(value.ToString("dd-MM-yyyy hh:mm:ss.fff"));
-                                                }
+													//double seconds = jsonArray.getJSONObject(i).getDouble("TotalSeconds");
+													double seconds = ParseExecutionTimeToSeconds(Elapsed[i]);
 
-                                                List<string> KeyFrameStatuses = new List<string>();
-                                                foreach (JToken token in jsonState.SelectTokens(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[*].Status", i))) KeyFrameStatuses.Add(token.Value<string>()); //Old versions of MSBuild do not support C# 6 features: Interpolated strings ($ operator), String.Format instead
-                                                List<string> KeyFrameLogMessages = new List<string>();
-                                                foreach (JToken token in jsonState.SelectTokens(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[*].LogMessage", i))) KeyFrameLogMessages.Add(token.Value<string>());
+													logger.Info(Messages.CASE_CONSOLE_LOG_SEPARATOR);
 
-                                                logger.Info(String.Format(Messages.CASE_INFORMATION, CaseTitles[i], Statuses[i], Elapsed[i]));
+													if (Statuses[i].Equals("Failed") || (Statuses[i].Equals("Done") && doneStatusValue.Equals("Failed")) || Statuses[i].Equals("Error") || Statuses[i].Equals("Cancelled"))
+													{
+														if (Statuses[i].Equals("Error") || Statuses[i].Equals("Cancelled"))
+															failedCount++;
 
-                                                StringBuilder fullKeyframes =  new StringBuilder();
-                                                int currentKeyFrameIndex = 0;
+														//KeyframeInfo
+														List<string> KeyFrameTimeStamps = new List<string>();
+														foreach (JToken token in jsonState.SelectTokens(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[*].Timestamp", i)))
+														{
+															var value = (DateTime)token.ToObject(typeof(DateTime));
+															KeyFrameTimeStamps.Add(value.ToString("dd-MM-yyyy hh:mm:ss.fff"));
+														}
 
-                                                for (int j = 0; j < KeyFrameStatuses.Count; j++)
-                                                {
-                                                    string level = DefaultTokenStringValueIfNull(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[{1}].Level", i, j), jsonState);
-                                                    if (!String.IsNullOrEmpty(level) && !level.Contains("Trace"))
-                                                    {
-                                                        String keyFrame = String.Format(Messages.CASE_STACKTRACE_FORMAT, KeyFrameTimeStamps[currentKeyFrameIndex], KeyFrameLogMessages[currentKeyFrameIndex]);
-                                                        logger.Info(keyFrame);
-                                                        fullKeyframes.AppendLine(keyFrame);
-                                                    }
-                                                    currentKeyFrameIndex++;
-                                                }
+														List<string> KeyFrameStatuses = new List<string>();
+														foreach (JToken token in jsonState.SelectTokens(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[*].Status", i))) KeyFrameStatuses.Add(token.Value<string>()); //Old versions of MSBuild do not support C# 6 features: Interpolated strings ($ operator), String.Format instead
+														List<string> KeyFrameLogMessages = new List<string>();
+														foreach (JToken token in jsonState.SelectTokens(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[*].LogMessage", i))) KeyFrameLogMessages.Add(token.Value<string>());
 
-                                                fullKeyframes.AppendLine("Environment: " + Environments[i]);
-                                                logger.Info("Environment: " + Environments[i]);
-                                                buildResult.Schedules[currentScheduleIndex].Cases.Add(new Case(CaseTitles[i], Statuses[i], seconds, fullKeyframes.ToString(), ScheduleTitle/* + "[" + ScheduleId + "]"*/));
-                                                fullKeyframes = null;
-                                            }
-                                            else
-                                            {
-                                                logger.Info(String.Format(Messages.CASE_INFORMATION, CaseTitles[i], Statuses[i], Elapsed[i]));
-                                                buildResult.Schedules[currentScheduleIndex].Cases.Add(new Case(CaseTitles[i], Statuses[i], seconds, ScheduleTitle/* + "[" + ScheduleId + "]"*/));
-                                            }
-                                        }
+														logger.Info(String.Format(Messages.CASE_INFORMATION, CaseTitles[i], Statuses[i], Elapsed[i]));
 
-                                        buildResult.Schedules[currentScheduleIndex].Passed = passedCount;
-                                        buildResult.Schedules[currentScheduleIndex].Failed = failedCount;
+														StringBuilder fullKeyframes =  new StringBuilder();
+														int currentKeyFrameIndex = 0;
 
-                                        if (buildResult.Schedules[currentScheduleIndex].Failed > 0)
-                                            buildResult.Schedules[currentScheduleIndex].Status = "Failed";
-                                        else
-                                            buildResult.Schedules[currentScheduleIndex].Status = "Passed";
-                                    }
-                                }
+														for (int j = 0; j < KeyFrameStatuses.Count; j++)
+														{
+															string level = DefaultTokenStringValueIfNull(String.Format("LastRun.AutomationRunItems[{0}].Keyframes[{1}].Level", i, j), jsonState);
+															if (!String.IsNullOrEmpty(level) && !level.Contains("Trace"))
+															{
+																String keyFrame = String.Format(Messages.CASE_STACKTRACE_FORMAT, KeyFrameTimeStamps[currentKeyFrameIndex], KeyFrameLogMessages[currentKeyFrameIndex]);
+																logger.Info(keyFrame);
+																fullKeyframes.AppendLine(keyFrame);
+															}
+															currentKeyFrameIndex++;
+														}
 
-                                break;
+														fullKeyframes.AppendLine("Environment: " + Environments[i]);
+														logger.Info("Environment: " + Environments[i]);
+														buildResult.Schedules[currentScheduleIndex].Cases.Add(new Case(CaseTitles[i], Statuses[i], seconds, fullKeyframes.ToString(), ScheduleTitle/* + "[" + ScheduleId + "]"*/));
+														fullKeyframes = null;
+													}
+													else
+													{
+														logger.Info(String.Format(Messages.CASE_INFORMATION, CaseTitles[i], Statuses[i], Elapsed[i]));
+														buildResult.Schedules[currentScheduleIndex].Cases.Add(new Case(CaseTitles[i], Statuses[i], seconds, ScheduleTitle/* + "[" + ScheduleId + "]"*/));
+													}
+												}
 
-                            case 404://SCHEDULE NOT FOUND, LIKELY WAS DELETED WHILE PREVIOUS SCHEDULES WERE RUNNING
-                                String errorMessage404 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage404 += String.Format("\n{0}", String.Format(Messages.NO_SUCH_SCHEDULE_WAS_FOUND, scheduleTitle, scheduleId));
-                                throw new Exception(errorMessage404);
+												buildResult.Schedules[currentScheduleIndex].Passed = passedCount;
+												buildResult.Schedules[currentScheduleIndex].Failed = failedCount;
 
-                            case 444://SCHEDULE HAS NOT REFRESHED YET AFTER START/RESTART
-                                String errorMessage444 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage444 += String.Format("\n{0}", Messages.SCHEDULE_HAS_NOT_REFRESHED_YET);
-                                isScheduleStillRunning = true;
-                                logger.Error(errorMessage444);
-                                break;
+												if (buildResult.Schedules[currentScheduleIndex].Failed > 0)
+													buildResult.Schedules[currentScheduleIndex].Status = "Failed";
+												else
+													buildResult.Schedules[currentScheduleIndex].Status = "Passed";
+											}
+										}
 
-                            case 445://LICENSE EXPIRED
-                                String errorMessage445 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage445 += String.Format("\n{0}", Messages.LICENSE_EXPIRED);
-                                throw new Exception(errorMessage445);
+										break;
 
-                            case 448://CACHE TIMEOUT
-                                String errorMessage448 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage448 += String.Format("\n{0}", String.Format(Messages.CACHE_TIMEOUT_EXCEPTION, scheduleTitle, scheduleId));
-                                isScheduleStillRunning = true;
-                                logger.Error(errorMessage448);
-                                break;
+									case 404://SCHEDULE NOT FOUND, LIKELY WAS DELETED WHILE PREVIOUS SCHEDULES WERE RUNNING
+										String errorMessage404 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage404 += String.Format("\n{0}", String.Format(Messages.NO_SUCH_SCHEDULE_WAS_FOUND, scheduleTitle, scheduleId));
+										throw new Exception(errorMessage404);
 
-                            case 500://CONTROLLER ERROR
-                                String errorMessage500 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                errorMessage500 += String.Format("\n{0}", String.Format(Messages.CONTROLLER_RESPONDED_WITH_ERRORS, scheduleTitle, scheduleId));
-                                throw new Exception(errorMessage500);
+									case 406:
+                                        String errorMessage406 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+                                        errorMessage406 += String.Format("\n{0}", Messages.WRONG_ACCESS_KEY);
+                                        throw new Exception(errorMessage406);
 
-                            default:
-                                String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
-                                throw new Exception(errorMessage);
-                        }
-                    }
+									case 444://SCHEDULE HAS NOT REFRESHED YET AFTER START/RESTART
+										String errorMessage444 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage444 += String.Format("\n{0}", Messages.SCHEDULE_HAS_NOT_REFRESHED_YET);
+										isScheduleStillRunning = true;
+										logger.Error(errorMessage444);
+										break;
+
+									case 445://LICENSE EXPIRED
+										String errorMessage445 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage445 += String.Format("\n{0}", Messages.LICENSE_EXPIRED);
+										throw new Exception(errorMessage445);
+
+									case 448://CACHE TIMEOUT
+										String errorMessage448 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage448 += String.Format("\n{0}", String.Format(Messages.CACHE_TIMEOUT_EXCEPTION, scheduleTitle, scheduleId));
+										isScheduleStillRunning = true;
+										logger.Error(errorMessage448);
+										break;
+
+									case 500://CONTROLLER ERROR
+										String errorMessage500 = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										errorMessage500 += String.Format("\n{0}", String.Format(Messages.CONTROLLER_RESPONDED_WITH_ERRORS, scheduleTitle, scheduleId));
+										throw new Exception(errorMessage500);
+
+									default:
+										String errorMessage = String.Format(Messages.ERROR_CODE_MESSAGE, statusCode, status);
+										throw new Exception(errorMessage);
+								}
+							}
+						}
+					}
                 }
                 catch (HttpRequestException e)  //In case of problems with connection to controller the plugin will be waiting for connection reestablishment
                 {
@@ -1047,7 +1112,7 @@ namespace TFSIntegrationConsole
             }
         }
 
-        public static string Call(string LeaptestControllerURL, string time, string doneStatus, string report, string log, string ids, string titles)
+        public static string Call(string LeaptestControllerURL, string accessKey, string time, string doneStatus, string report, string log, string ids, string titles)
         {
 
             SimpleLogger logger = new SimpleLogger(log);
@@ -1077,7 +1142,7 @@ namespace TFSIntegrationConsole
 
             try
             {
-                schedulesIdTitleDictionary = GetSchedulesIdTitleDictionary(LeaptestControllerURL, rawScheduleList, buildResult, invalidSchedules, logger).Result;
+                schedulesIdTitleDictionary = GetSchedulesIdTitleDictionary(LeaptestControllerURL, accessKey, rawScheduleList, buildResult, invalidSchedules, logger).Result;
                 rawScheduleList = null;//don't need that anymore
 
                 List<String> schIdsList = new List<String>(schedulesIdTitleDictionary.Keys);
@@ -1098,7 +1163,7 @@ namespace TFSIntegrationConsole
                     {
                         schId = schIdsList[i];
                         schTitle = schedulesIdTitleDictionary[schId];
-                        RUN_RESULT runResult = RunSchedule(LeaptestControllerURL, schId, schTitle, currentScheduleIndex, buildResult, invalidSchedules, logger).Result;
+                        RUN_RESULT runResult = RunSchedule(LeaptestControllerURL, accessKey, schId, schTitle, currentScheduleIndex, buildResult, invalidSchedules, logger).Result;
                         logger.Info("Current schedule index: " + currentScheduleIndex);
 
                         if (runResult.Equals(RUN_RESULT.RUN_SUCCESS)) // if schedule was successfully run
@@ -1108,7 +1173,7 @@ namespace TFSIntegrationConsole
                             do
                             {
                                 Thread.Sleep(timeDelay * 1000); //Time delay
-                                isStillRunning = GetScheduleState(LeaptestControllerURL, schId, schTitle, currentScheduleIndex, doneStatus, buildResult, invalidSchedules, logger).Result;
+                                isStillRunning = GetScheduleState(LeaptestControllerURL, accessKey, schId, schTitle, currentScheduleIndex, doneStatus, buildResult, invalidSchedules, logger).Result;
                                 if (isStillRunning) logger.Info(String.Format(Messages.SCHEDULE_IS_STILL_RUNNING, schTitle, schId));
                             }
                             while (isStillRunning);
@@ -1177,7 +1242,7 @@ namespace TFSIntegrationConsole
                 {
                     String interruptedExceptionMessage = String.Format(Messages.INTERRUPTED_EXCEPTION, e.Message);
                     logger.Error(interruptedExceptionMessage);
-                    bool isSuccessfullyStopped = StopSchedule(LeaptestControllerURL, schId, schTitle, logger).Result;
+                    bool isSuccessfullyStopped = StopSchedule(LeaptestControllerURL, accessKey, schId, schTitle, logger).Result;
                     logger.Error(Messages.BUILD_ABORTED);
                     return Messages.BUILD_ABORTED;
                 }
@@ -1199,7 +1264,7 @@ namespace TFSIntegrationConsole
 $logFile = $Env:BUILD_SOURCESDIRECTORY, "leaptestIntegrationBuild$Env:BUILD_BUILDNUMBER.log" -Join "\"
 
 Add-Type -ReferencedAssemblies $assemblies -TypeDefinition $sourceCode -Language CSharp
-$buildResult = [TFSIntegrationConsole.Program]::Call($address,$timeDelay,$doneStatusAs,$report,$logFile,$schids,$schedules)
+$buildResult = [TFSIntegrationConsole.Program]::Call($address,$accessKey,$timeDelay,$doneStatusAs,$report,$logFile,$schids,$schedules)
 
 if($buildResult -eq "SUCCEEDED")
 {

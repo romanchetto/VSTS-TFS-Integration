@@ -15,7 +15,7 @@
     ],
   "version": {
     "Major": "1",
-    "Minor": "1",
+    "Minor": "3",
     "Patch": "0"
   },
   "minimumAgentVersion": "1.83.0",
@@ -29,7 +29,14 @@
       "required": true,
       "helpMarkDown": "URL of your Leaptest Controller http://{HOSTNAME}:{Controller port}"
     },
-	 {
+    {
+      "name": "accessKey",
+      "type": "string",
+      "label": "Access Key",
+      "required": true,
+      "helpMarkDown": "Access Key for using Leaptest API"
+    },
+	  {
       "name": "timeDelay",
       "type": "string",
       "label": "Time Delay (in sec)",
