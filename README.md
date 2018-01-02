@@ -4,7 +4,11 @@ This is Leaptest Integration extension for Visual Studio Team Services and Team 
   
 Leaptest is a mighty automation testing system and now it can be used for running [smoke, functional, acceptance] tests, generating reports and a lot more in VSTS and TFS. 
 
-# Features:
+# Version 1.3.0-beta features  
+
+- For January LEAPTEST release.  
+
+- LEAPTEST REST API now require Access Key. Relevant functionality has been added.  
   
 - Run automated tests in your VSTS/TFS build tasks
   
